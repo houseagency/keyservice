@@ -133,6 +133,11 @@ specific user on a specific service.
 The `Authorization:` HTTP header should be a sessionist header created from
 a shared secret.
 
+Important: This request should be made from "the Real Service", not from the
+client! Also, the shared secret used by "the Real Service", must be kept secret
+from the clients, or the clients will be able to fetch other users' encryption
+keys.
+
 Request body payload:
 
 ```
@@ -150,6 +155,9 @@ Will respond with:
 	"sessionToken": "<<some random string>>"
 }
 ```
+
+You probably want a whitelist of IP addresses that are allowed to access the
+`/connect` endpoint.
 
 ### PUT /key
 
