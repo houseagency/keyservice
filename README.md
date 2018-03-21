@@ -1,17 +1,18 @@
 keyservice
 ==========
-
+ 
 The purpose of this service is to store encryption keys used for encrypting
 data on cloud providers.
 
 The intentional use is that a client has contact with both the keyservice and
-some "other service" (which we call "the Real Service"). The keyservice will
+some other service (which we call "the Real Service"). The keyservice will
 provide encryption keys, used by the client to encrypt data before sent to
 "the Real Service". Hence, a data breach on "the Real Service" will only leak
 encrypted data.
 
-Preferably, the keyservice should not be hosted at the same provider as
-"the Real Service".
+Preferably, the keyservice should not be hosted at the same cloud provider as
+"the Real Service". Currently, the keyservice is made to be hosted at the
+Google Cloud (using Google Cloud Functions and Google Cloud Storage).
 
 Background
 ----------
@@ -26,49 +27,15 @@ So, this service is for handling encryption keys on one cloud provider,
 and storing the encrypted data on another, to prevent any direct access to the
 real data.
 
-Flow
-----
+How data is stored
+------------------
 
-### Step 1.
-
-The client creates a (logged in) session at "the Real Service".
-
-### Step 2.
-
-The client connects to the keyservice and gets a random string called an "init
-token" in the response.
-
-The client creates an SHA512 hash of the "init token", which we call the "init
-token hash".
-
-### Step 3.
-
-The client tells "the Real Service" that it needs the encryption key(s).
-
-It sends the "init token hash" in the request.
-
-### Step 4.
-
-"The Real Service" connects to the keyservice.
-
-It passes on:
-* A namespace for this particular "Real Service". (So, multiple real services
-  can use the same keyservice.)
-* An ID for the user who connected. It can be an ID, a user name, or anything
-  unique used by "the Real Service" to identify the user.
-* The "init token hash" created at step 2 (and passed to "the Real Service"
-  at step 3).
-
-### Step 5. 
-
-The keyservice responds with a session token (which is just a random
-string) to "the Real Service", and "the Real Service" passes that session
-token on to the client.
-
-### Step 6.
-
-Using the session identifier and the init token, the client can now PUT and
-GET it's encryption key(s).
+Data is stored as blobs on Google Cloud Storage. The keys (filenames) are
+hashed before sent to Google, so they are not readable. This also means that
+you can not list the keys/filenames. The very data (content) is encrypted at
+Google Cloud Functions using Camellia encryption. On top of that, we pass an
+encryption key to Google Cloud Storage for additional AES encryption before
+the data is written to disk.
 
 Considerations and implications of the flow
 -------------------------------------------
@@ -81,10 +48,11 @@ Service".
 You probably should not store any unencrypted data, but you might still want
 to handle unencrypted data. For example, you might want to send an e-mail to
 new users, so you need an API endpoint that does that on sign up. But you
-probably don't want that endpoint (or any logs) to store the e-mail address.
+probably don't want that endpoint (or any logs) to store the unencrypted
+e-mail address.
 
-Storing unencrypted data that is also encrypted, will help anyone trying to
-crack your encryption.
+Storing unencrypted data that is also stored in encrypted form, will help
+someone who is trying to crack your encryption.
 
 One way of handling it, could be to use a third cloud provider for handling
 unencrypted stuff that should never be stored, just to make it much harder to
@@ -112,43 +80,29 @@ normal precautions to store the crypted/hashed data. This keyservice should
 not be your full protection. Crypto algorithms will be cracked, and
 brute forcing is always becoming faster.
 
-Endponts at the keyservice
---------------------------
+Endponts when not yet authorized
+--------------------------------
 
-### POST /init
+### POST /account
 
-Returns an "init token"
+Create a new user. A user can be identified by multiple userIds (which are
+hashes of e-mail addresses, phone numbers, usernames, or whatever you choose).
 
-```
-{
-	"initToken": "<<some random string>>"
-}
-```
+This endpoint will return a session token (i.e. it will log in the new user).
 
-### POST /connect
-
-This is the request made by "the Real Service" to connect a client to a
-specific user on a specific service.
-
-The `Authorization:` HTTP header should be a sessionist header created from
-a shared secret.
-
-Important: This request should be made from "the Real Service", not from the
-client! Also, the shared secret used by "the Real Service", must be kept secret
-from the clients, or the clients will be able to fetch other users' encryption
-keys.
-
-Request body payload:
+Send:
 
 ```
 {
-	"namespace": "my_cool_website",
-	"userId": "347",
-	"initTokenHash": "<<base64 sha512 hash of the init token>>"
+	"userIds": [
+		"<< hash of username/email/whatever >>",
+		"<< hash of username/email/whatever >>"
+	],
+	"password": "<< hash of password >>"
 }
 ```
 
-Will respond with:
+Returns a session token:
 
 ```
 {
@@ -156,17 +110,107 @@ Will respond with:
 }
 ```
 
-You probably want a whitelist of IP addresses that are allowed to access the
-`/connect` endpoint.
+Will return an error if any of the userIds is already in use.
 
-### PUT /key
+### POST /account/login
+
+Send:
+
+```
+{
+	"userId": "<< hash of username/email/whatever >>",
+	"password": "<< hash of password >>"
+}
+```
+
+Returns a session token:
+
+```
+{
+	"sessionTokenId": "<<some random string>>"
+	"sessionTokenSecret": "<<some random string>>"
+}
+```
+
+### POST /account/pwreset/init
+
+This endpoint will send a request from the server to a pre-defined URL, which
+is probably the service for email templating, which renders an email to the
+client.
+
+Two variables will be passed in the request from the server: `trackId` and
+`code`. The `trackId` is the same code as you post from the client side, and
+you can use it however is needed by the email template server. The `code` is
+the code used for doing the password reset at `/account/pwreset/commit`.
+
+```
+{
+	"userId": "<< hash of username/email/whatever >>",
+	"trackId": "<< some id for the reset attempt >>"
+}
+```
+
+### POST /account/pwreset/commit
+
+The endpoint is used for actually committing the password reset. It requires
+a new password and the `code` that was sent to some pre-defined URL when
+`/account/pwreset/init` was called.
+
+```
+{
+	"password": "<< the user's new password >>",
+	"code": "<< the password reset code >>"
+}
+```
+
+
+Endponts when authorized
+------------------------
+
+### POST /account/password
+
+Send:
+
+```
+Authorized: ss1 xxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+{
+	"previousPassword": "<< hash of old password >>",
+	"password": "<< hash of new password >>"
+}
+```
+
+### PUT /account
+
+Use this endpoint for updating your userIds.
+
+Send:
+
+```
+Authorized: ss1 xxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+{
+	"userIds": [
+		"<< hash of username/email/whatever >>",
+		"<< hash of username/email/whatever >>"
+	]
+}
+```
+
+### DELETE /account
+
+```
+Authorized: ss1 xxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+### PUT /privdata/:key
 
 Stores the body payload (i.e. the encryption key(s)).
 
 The `Authorization:` HTTP header should be a sessionist header created with
 the session token as the key id, and the init token as the secret key.
 
-### GET /key
+### GET /privdata/:key
 
 Returns the encryption key(s).
 

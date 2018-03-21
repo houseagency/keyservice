@@ -1,0 +1,23 @@
+{
+  "name": "key",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "deploy": "./node_modules/.bin/serverless deploy",
+    "test": "./node_modules/.bin/mocha --recursive"
+  },
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "chai": "^4.1.2",
+    "mocha": "^5.0.4",
+    "serverless": "^1.26.1",
+    "serverless-google-cloudfunctions": "^1.1.1",
+    "testdouble": "^3.5.2"
+  },
+  "dependencies": {
+    "@google-cloud/storage": "^1.6.0",
+    "sessionistheader": "^0.1.8"
+  }
+}
